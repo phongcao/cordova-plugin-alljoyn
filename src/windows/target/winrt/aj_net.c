@@ -50,6 +50,8 @@ uint8_t dbgNET = 0;
 
 #define MESSAGE_BUFFER_SIZE 30000
 
+#define SEND_TIMEOUT 3000
+
 // Phong Added inet_pton() 
 #if WINAPI_FAMILY_PARTITION(WINAPI_PARTITION_PHONE_APP)
 
@@ -221,16 +223,51 @@ static AJ_Status AJ_Net_Send(AJ_IOBuffer* buf)
 		wsbuf.buf = (char*)buf->readPtr;
 
         ret = WSASend((SOCKET)buf->context, &wsbuf, 1, NULL, flags, &ov, NULL);
-        if (!WSAGetOverlappedResult((SOCKET)buf->context, &ov, &tx, TRUE, &flags)) {
-            AJ_ErrPrintf(("AJ_Net_Send(): send() failed. WSAGetLastError()=0x%x, status=AJ_ERR_WRITE\n", WSAGetLastError()));
-            return AJ_ERR_WRITE;
-        }
-        buf->readPtr += tx;
+
+		if (ret == SOCKET_ERROR)
+		{
+			int sendEventRet = WSAWaitForMultipleEvents(1, &ov.hEvent, FALSE, SEND_TIMEOUT, TRUE);
+
+			if (sendEventRet == WSA_WAIT_EVENT_0)
+			{
+				if (!WSAGetOverlappedResult((SOCKET)buf->context, &ov, &tx, TRUE, &flags))
+				{
+					AJ_ErrPrintf(("AJ_Net_Send(): send() failed. WSAGetLastError()=0x%x, status=AJ_ERR_WRITE\n", WSAGetLastError()));
+					return AJ_ERR_WRITE;
+				}
+
+				buf->readPtr += tx;
+			}
+			else if (sendEventRet == WSA_WAIT_TIMEOUT && WSAGetLastError() == WSAECONNRESET)
+			{
+				AJ_ErrPrintf(("AJ_Net_Send(): send() failed. An existing connection was forcibly closed by the remote host."));
+				return AJ_ERR_CONNECT;
+			}
+			else
+			{
+				AJ_ErrPrintf(("AJ_Net_Send(): send() failed. WSAGetLastError()=0x%x, status=AJ_ERR_WRITE\n", WSAGetLastError()));
+				return AJ_ERR_WRITE;
+			}
+		}
+		else
+		{
+			if (!WSAGetOverlappedResult((SOCKET)buf->context, &ov, &tx, TRUE, &flags)) 
+			{
+				AJ_ErrPrintf(("AJ_Net_Send(): send() failed. WSAGetLastError()=0x%x, status=AJ_ERR_WRITE\n", WSAGetLastError()));
+				return AJ_ERR_WRITE;
+			}
+
+			buf->readPtr += tx;
+		}
     }
-    if (AJ_IO_BUF_AVAIL(buf) == 0) {
+
+    if (AJ_IO_BUF_AVAIL(buf) == 0) 
+	{
         AJ_IO_BUF_RESET(buf);
     }
+
     AJ_InfoPrintf(("AJ_Net_Send(): status=AJ_OK\n"));
+
     return AJ_OK;
 }
 
